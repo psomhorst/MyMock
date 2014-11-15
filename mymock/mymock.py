@@ -1,11 +1,15 @@
-import subprocess
 import mirakuru
+import subprocess
 import os
 from distutils.spawn import find_executable
 import shutil
+import sys
+import psutil
 
 
 class MyMock(object):
+
+    """The MyMock object creates and maintains a mock MySQL-server."""
 
     pid_executor = None
 
@@ -15,11 +19,6 @@ class MyMock(object):
             return '/tmp/mymock.{}.data'.format(port)
 
         def get_base_dir(mysql_server):
-            print find_executable(mysql_server)
-            print os.path.realpath(find_executable(mysql_server))
-            print os.path.dirname(os.path.realpath(find_executable(mysql_server)))
-            print os.path.join(os.path.dirname(os.path.realpath(find_executable(mysql_server))), '..')
-            print os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(find_executable(mysql_server))), '..'))
             return os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(
                                    find_executable(mysql_server))), '..'))
 
@@ -38,7 +37,7 @@ class MyMock(object):
         self.mysql_admin_exec = kwargs.get('mysql_admin_exec', 'mysqladmin')
 
         self.data_dir = kwargs.get('data_dir', get_data_dir(self.port))
-        self.base_dir = kwargs.get(get_base_dir(self.mysql_server))
+        self.base_dir = kwargs.get('base_dir', get_base_dir(self.mysql_server))
         self.pid_file = kwargs.get('pid_file', get_pid_file(self.port))
         self.socket = kwargs.get('socket', get_socket(self.port))
         self.log_file = kwargs.get('log_file', get_log_file(self.port))
@@ -46,37 +45,63 @@ class MyMock(object):
         self.host = kwargs.get('host', 'localhost')
         self.timeout = kwargs.get('timeout', 60)
 
+        self.force = kwargs.get('force', True)
+
+    def get_sqlalchemy_path(self):
+        return 'mysql://root@{}/?unix_socket={}'.format(self.host, self.socket)
+
     def up(self):
-        command_directory = ' '.join([self.mysql_init,
-                                      '--user={}'.format(os.getenv('USER')),
-                                      '--datadir={}'.format(self.data_dir),
-                                      '--basedir={}'.format(self.base_dir)])
+        """Try to start create the data directory and start the server process."""
+
+        def create_data_directory():
+            """Try to create the data directory."""
+            command = ' '.join([self.mysql_init,
+                                '--user={}'.format(os.getenv('USER')),
+                                '--datadir={}'.format(self.data_dir),
+                                '--basedir={}'.format(self.base_dir)])
+
+            subprocess.check_output(command, shell=True)
+
+        def create_pid_executor():
+            """Create a pid executor."""
+            command = ' '.join([self.mysql_server,
+                                '--datadir={}'.format(self.data_dir),
+                                '--pid-file={}'.format(self.pid_file),
+                                '--port={}'.format(self.port),
+                                '--socket={}'.format(self.socket),
+                                '--log-error={}'.format(self.log_file)])
+
+            pid_executor = mirakuru.PidExecutor(command,
+                                                self.pid_file,
+                                                timeout=self.timeout,
+                                                shell=True)
+
+            return pid_executor, command
+
+        if self.force:
+            self.down()
+            running_process = self.is_running()
+            if running_process:
+                running_process.terminate()
 
         try:
-            subprocess.check_output(command_directory, shell=True)
-            print("MySQL mock datadir is created")
+            create_data_directory()
+
         except Exception:
             self.down()
-            raise Exception("Could not create data directory ('{}')".format(command_directory))
+            type, value, traceback = sys.exc_info()
+            raise Exception("Could not create directory"), None, traceback
 
-        command_pid_executor = ' '.join([self.mysql_server,
-                                         '--datadir={}'.format(self.data_dir),
-                                         '--pid-file={}'.format(self.pid_file),
-                                         '--port={}'.format(self.port),
-                                         '--socket={}'.format(self.socket),
-                                         '--log-error={}'.format(self.log_file)])
-
-        self.pid_executor = mirakuru.PidExecutor(command_pid_executor,
-                                                 self.pid_file,
-                                                 timeout=self.timeout,
-                                                 shell=True)
+        self.pid_executor, pid_exec_command = create_pid_executor()
 
         try:
             self.pid_executor.start()
-            print "MySQL server started"
         except Exception:
             self.down()
-            raise Exception("Could not start server ('{}')".format(command_pid_executor))
+            type, value, traceback = sys.exc_info()
+            raise Exception("Could not run pid executor"), None, traceback
+
+        return True
 
     def down(self):
         command_shutdown = ' '.join([self.mysql_admin_exec,
@@ -103,3 +128,28 @@ class MyMock(object):
             print("Could not stop PID executor ().".format(self.pid_executor))
 
         print("MySQL mock server down.")
+
+    def check_running(self, cmdline_arg):
+        for process in psutil.process_iter():
+            try:
+                if cmdline_arg in process.cmdline():
+                    return process
+            except psutil.AccessDenied:
+                pass
+        return False
+
+    def sock_running(self):
+        return self.check_running('--socket={}'.format(self.socket))
+
+    def pid_running(self):
+        return self.check_running('--pid-file={}'.format(self.pid_file))
+
+    def datadir_running(self):
+        return self.check_running('--datadir={}'.format(self.data_dir))
+
+    def is_running(self):
+        for func in (self.sock_running, self.pid_running, self.datadir_running):
+            result = func()
+            if result:
+                return result
+        return False
