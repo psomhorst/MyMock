@@ -31,6 +31,12 @@ class MyMock(object):
         def get_log_file(port):
             return '/tmp/mymock.{}.log'.format(port)
 
+        def get_bin_file(port):
+            return '/tmp/mymock.{}.bin'.format(port)
+
+        def get_bin_index(port):
+            return '/tmp/mymock.{}.bin.index'.format(port)
+
         self.port = kwargs.get('port', 9218)
         self.mysql_server = kwargs.get('mysql_server', 'mysqld_safe')
         self.mysql_init = kwargs.get('mysql_init', 'mysql_install_db')
@@ -41,6 +47,8 @@ class MyMock(object):
         self.pid_file = kwargs.get('pid_file', get_pid_file(self.port))
         self.socket = kwargs.get('socket', get_socket(self.port))
         self.log_file = kwargs.get('log_file', get_log_file(self.port))
+        self.bin_file = kwargs.get('bin_file', get_bin_file(self.port))
+        self.bin_index = kwargs.get('bin_index', get_bin_index(self.port))
 
         self.host = kwargs.get('host', 'localhost')
         self.timeout = kwargs.get('timeout', 60)
@@ -69,7 +77,9 @@ class MyMock(object):
                                 '--pid-file={}'.format(self.pid_file),
                                 '--port={}'.format(self.port),
                                 '--socket={}'.format(self.socket),
-                                '--log-error={}'.format(self.log_file)])
+                                '--log-error={}'.format(self.log_file),
+                                '--log-bin={}'.format(self.bin_file),
+                                '--log-bin-index={}'.format(self.bin_index)])
 
             pid_executor = mirakuru.PidExecutor(command,
                                                 self.pid_file,
